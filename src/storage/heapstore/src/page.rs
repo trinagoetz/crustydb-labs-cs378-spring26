@@ -30,7 +30,23 @@ impl Page {
     /// HINT: To convert a variable x to bytes using little endian, use
     /// x.to_le_bytes()
     pub fn new(page_id: PageId) -> Self {
-        todo!("Your code here")
+        let mut data = [0u8; PAGE_SIZE];
+
+        // page id at bytes 0..2
+        data[0..2].copy_from_slice(&page_id.to_le_bytes());
+
+        // number of slots = 0
+        let zero: u16 = 0;
+        data[2..4].copy_from_slice(&zero.to_le_bytes());
+
+        // free space offset = PAGE_SIZE initially (no slots yet)
+        let free_end: u16 = PAGE_SIZE as u16;
+        data[4..6].copy_from_slice(&free_end.to_le_bytes());
+
+        // empty header space (for now?) = 0
+        data[6..8].copy_from_slice(&zero.to_le_bytes());
+
+        Page { data }
     }
 
     /// Return the page id for a page
@@ -39,19 +55,20 @@ impl Page {
     /// (the example is for a u16 type and the data store in little endian)
     /// u16::from_le_bytes(data[X..Y].try_into().unwrap());
     pub fn get_page_id(&self) -> PageId {
-        todo!("Your code here")
+        // getting PageId butes from beginning of header
+        u16::from_le_bytes(self.data[0..2].try_into().unwrap())
     }
 
     /// Create a page from a byte array
     #[allow(dead_code)]
     pub fn from_bytes(data: [u8; PAGE_SIZE]) -> Self {
-        todo!("Your code here")
+        Page { data }
     }
 
     /// Get a reference to the bytes of the page
     ///
     pub fn to_bytes(&self) -> &[u8; PAGE_SIZE] {
-        todo!("Your code here")
+        &self.data
     }
 
     /// Utility function for comparing the bytes of another page.

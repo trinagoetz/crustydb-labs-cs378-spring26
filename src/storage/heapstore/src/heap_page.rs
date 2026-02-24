@@ -16,6 +16,13 @@ pub trait HeapPage {
     fn get_header_size(&self) -> usize;
     fn get_free_space(&self) -> usize;
 
+    fn get_num_slots(&self) -> SlotId;
+    fn get_free_end(&self) -> Offset;
+    fn get_value_offset(&self, slot_id: SlotId) -> Offset;
+    fn get_new_slot(&mut self) -> Option<SlotId>;
+    fn remove_slot(&mut self, slot_id: SlotId) -> Option<()>;
+    fn scoot_down(&mut self) -> Option<()>;
+
     //Add function signatures for any helper function you need here
 }
 
@@ -32,12 +39,92 @@ impl HeapPage for Page {
     /// They must have the same size.
     /// self.data[X..y].clone_from_slice(&bytes);
     fn add_value(&mut self, bytes: &[u8]) -> Option<SlotId> {
-        todo!("Your code here")
+        // Check if we have enough space in page (include 6 in case of adding new slot)
+        if self.get_free_space() < 6 {
+            dbg!(
+                "not enough space to insert value! less than 6 bytes available",
+                bytes.len(),
+                self.get_free_space()
+            );
+            return None;
+        }
+
+        let free_space = self.get_free_space() - 6;
+        if free_space <= bytes.len() {
+            dbg!("not enough space to insert value!", bytes.len(), free_space);
+            return None;
+        }
+
+        // Consolidate our free space to the front
+        self.scoot_down();
+
+        let free_end = self.get_free_end();
+
+        // Now that we know we have space at the front, claim a new slot
+        let new_slot = self.get_new_slot();
+        let new_slot_to_use = new_slot.unwrap() as usize;
+        // And set the data in the slot
+        self.data[8 + (new_slot_to_use * 6)..8 + (new_slot_to_use * 6) + 2]
+            .copy_from_slice(&(free_end as Offset - bytes.len() as Offset).to_le_bytes());
+        self.data[8 + (new_slot_to_use * 6) + 2..8 + (new_slot_to_use * 6) + 4]
+            .copy_from_slice(&(bytes.len() as Offset).to_le_bytes());
+
+        // And then copy the data from the value into the page
+        self.data[free_end as usize - bytes.len()..free_end as usize]
+            .clone_from_slice(bytes);
+
+        // And update the freespace offset
+        self.data[4..6].copy_from_slice(&(free_end - bytes.len() as Offset).to_le_bytes());
+
+        new_slot
     }
 
     /// Return the bytes for the slotId. If the slotId is not valid then return None
     fn get_value(&self, slot_id: SlotId) -> Option<Vec<u8>> {
-        todo!("Your code here")
+        let num_slots = self.get_num_slots();
+
+        // Check if the slot_id is valid
+        if slot_id >= num_slots {
+            dbg!("slot_id to get_value is not valid!", slot_id, num_slots);
+            return None;
+        }
+
+        let slot_offset = 8 + (slot_id as usize * 6);
+        let value_offset =
+            Offset::from_le_bytes(self.data[slot_offset..slot_offset + 2].try_into().unwrap());
+        let value_length = Offset::from_le_bytes(
+            self.data[slot_offset + 2..slot_offset + 4]
+                .try_into()
+                .unwrap(),
+        );
+        let used = Offset::from_le_bytes(
+            self.data[slot_offset + 4..slot_offset + 6]
+                .try_into()
+                .unwrap(),
+        );
+
+        // Check if the slot is actually used
+        if used == 0 {
+            dbg!("slot_id to get_value is not used!", slot_id, num_slots);
+            return None;
+        }
+
+        // Extract values
+        let value_start = value_offset as usize;
+        let value_end = value_start + value_length as usize;
+
+        // Bounds check
+        if value_end > PAGE_SIZE {
+            dbg!(
+                "value length is not in bounds!",
+                value_start,
+                value_end,
+                PAGE_SIZE
+            );
+            return None;
+        }
+
+        Some(self.data[value_start..value_end].to_vec())
     }
 
     /// Delete the bytes/slot for the slotId. If the slotId is not valid then return None
@@ -45,7 +132,29 @@ impl HeapPage for Page {
     /// The space for the value should be free to use for a later added value.
     /// HINT: Return Some(()) for a valid delete
     fn delete_value(&mut self, slot_id: SlotId) -> Option<()> {
-        todo!("Your code here")
+        let num_slots = self.get_num_slots();
+
+        // Check if the slot_id is valid
+        if slot_id >= num_slots {
+            dbg!("slot id is not valid for removal!", slot_id, num_slots);
+            return None;
+        }
+
+        let slot_offset = 8 + (slot_id as usize * 6);
+        let used = Offset::from_le_bytes(
+            self.data[slot_offset + 4..slot_offset + 6]
+                .try_into()
+                .unwrap(),
+        );
+
+        // Check if the slot is actually used
+        if used == 0 {
+            dbg!("slot id to delete is already free!", slot_id, num_slots);
+            return None;
+        }
+
+        // Mark the slot as unused by calling remove_slot
+        self.remove_slot(slot_id)
     }
 
     /// A utility function to determine the size of the header in the page
@@ -53,7 +162,7 @@ impl HeapPage for Page {
     /// Will be used by tests.
     #[allow(dead_code)]
     fn get_header_size(&self) -> usize {
-        todo!("Your code here")
+        8 + (self.get_num_slots() as usize * 6)
     }
 
     /// A utility function to determine the total current free space in the page.
@@ -61,7 +170,188 @@ impl HeapPage for Page {
     /// Will be used by tests.
     #[allow(dead_code)]
     fn get_free_space(&self) -> usize {
-        todo!("Your code here")
+        let mut free_space = self.get_free_end() as usize - self.get_header_size();
+        for slot_id in 0..self.get_num_slots() {
+            let slot_offset = 8 + (slot_id as usize * 6);
+            let used = Offset::from_le_bytes(
+                self.data[slot_offset + 4..slot_offset + 6]
+                    .try_into()
+                    .unwrap(),
+            );
+            if used == 0 {
+                // This slot is unused, add its space to free_space
+                let value_length = Offset::from_le_bytes(
+                    self.data[slot_offset + 2..slot_offset + 4]
+                        .try_into()
+                        .unwrap(),
+                );
+                free_space += value_length as usize;
+            }
+        }
+        free_space
+    }
+
+    /// A helper function to get the number of slots in this page's slot array
+    /// (also means the number of records in this page)
+    #[allow(dead_code)]
+    fn get_num_slots(&self) -> SlotId {
+        SlotId::from_le_bytes(self.data[2..4].try_into().unwrap())
+    }
+
+    /// A helper function to get the offset of the end of the free space
+    /// My design should accumulate all free space to be right after the end of the slot array, no random free bytes in the data
+    #[allow(dead_code)]
+    fn get_free_end(&self) -> Offset {
+        Offset::from_le_bytes(self.data[4..6].try_into().unwrap())
+    }
+
+    /// A helper function to get the offset of a certain value given the slot ID
+    #[allow(dead_code)]
+    fn get_value_offset(&self, slot_id: SlotId) -> Offset {
+        let slot_id = slot_id as usize;
+        let offset = 8 + (slot_id * 6);
+        Offset::from_le_bytes(self.data[offset..offset + 2].try_into().unwrap())
+    }
+
+    /// A helper function to help add a slot to the slot array by returning an unused slot
+    /// Checks for any already unused slots first, and if not, adds a new slot (must update number of slots in this case)
+    #[allow(dead_code)]
+    fn get_new_slot(&mut self) -> Option<SlotId> {
+        let num_slots = self.get_num_slots();
+        let one = 1 as Offset;
+
+        // Check for any unused slots (with ALL bytes 0)
+        for i in 0..num_slots {
+            let slot_offset = 8 + (i as usize * 6);
+            let value_offset =
+                Offset::from_le_bytes(self.data[slot_offset..slot_offset + 2].try_into().unwrap());
+            let value_length = Offset::from_le_bytes(
+                self.data[slot_offset + 2..slot_offset + 4]
+                    .try_into()
+                    .unwrap(),
+            );
+            let used = Offset::from_le_bytes(
+                self.data[slot_offset + 4..slot_offset + 6]
+                    .try_into()
+                    .unwrap(),
+            );
+
+            if used == 0 && value_offset == 0 && value_length == 0 {
+                // Found an unused slot
+                // set used to 1 and return ID
+                self.data[slot_offset + 4..slot_offset + 6].copy_from_slice(&one.to_le_bytes());
+                return Some(i);
+            }
+        }
+
+        // No unused slots, so we have to create a new one
+        // Update the number of slots first
+        let new_num_slots = num_slots + 1;
+        self.data[2..4].copy_from_slice(&new_num_slots.to_le_bytes());
+
+        // Initialize the new slot with offset 0 and length 0, and used byte 1
+        let slot_offset = 8 + (num_slots as usize * 6);
+        self.data[slot_offset..slot_offset + 2].copy_from_slice(&0u16.to_le_bytes());
+        self.data[slot_offset + 2..slot_offset + 4].copy_from_slice(&0u16.to_le_bytes());
+        self.data[slot_offset + 4..slot_offset + 6].copy_from_slice(&one.to_le_bytes());
+
+        // Return the new slot's ID
+        Some(num_slots)
+    }
+
+    /// A helper function to clear a slot from the slot array
+    /// Basically just sets the slot's used byte to 0 to show that the slot is unused and should be consolidated in the next add
+    #[allow(dead_code)]
+    fn remove_slot(&mut self, slot_id: SlotId) -> Option<()> {
+        let num_slots = self.get_num_slots();
+
+        // Check if the slot_id is valid
+        if slot_id >= num_slots {
+            dbg!(slot_id, num_slots);
+            return None;
+        }
+
+        let slot_offset = 8 + (slot_id as usize * 6);
+        // Set the slot used byte to 0 to mark it as unused (leave offset and length so space can be consolidated on next add)
+        self.data[slot_offset + 4..slot_offset + 6].copy_from_slice(&0u16.to_le_bytes());
+
+        Some(())
+    }
+
+    /// A helper function to scoot all used records to the end of the page if we are adding
+    /// Basically rebuilds the whole page in a new byte array, header remains the same but loops through existing slots and if they are used,
+    /// puts them in at the end of the new page with new offsets accordingly (ensures that the free space goes in the middle all together)
+    /// If they're not used, we just add a slot entry with [0, 0, 0] and keep adding used ones after
+    /// Also careful to not change the slotIDs for anything, keeping them all in the same order
+    #[allow(dead_code)]
+    fn scoot_down(&mut self) -> Option<()> {
+        let num_slots = self.get_num_slots();
+
+        // Create a new data array to rebuild the page
+        let mut new_data = [0u8; PAGE_SIZE];
+
+        // Copy the header (first 8 bytes)
+        new_data[0..8].copy_from_slice(&self.data[0..8]);
+
+        // Start placing values from the end of the page
+        let mut current_offset = PAGE_SIZE as Offset;
+
+        // Go through all slots and rebuild the page
+        for slot_id in 0..num_slots {
+            let slot_offset = 8 + (slot_id as usize * 6);
+            let value_offset =
+                Offset::from_le_bytes(self.data[slot_offset..slot_offset + 2].try_into().unwrap());
+            let value_length = Offset::from_le_bytes(
+                self.data[slot_offset + 2..slot_offset + 4]
+                    .try_into()
+                    .unwrap(),
+            );
+            let used = Offset::from_le_bytes(
+                self.data[slot_offset + 4..slot_offset + 6]
+                    .try_into()
+                    .unwrap(),
+            );
+
+            if used == 1 {
+                // This slot is used, copy the value to the new location
+                let new_value_offset = current_offset - value_length;
+
+                // Copy the value data
+                let value_start = value_offset as usize;
+                let value_end = value_start + value_length as usize;
+                if value_end > PAGE_SIZE {
+                    dbg!(value_start, value_end, value_length, current_offset);
+                    return None;
+                }
+                let new_value_start = new_value_offset as usize;
+                let new_value_end = new_value_start + value_length as usize;
+
+                new_data[new_value_start..new_value_end]
+                    .copy_from_slice(&self.data[value_start..value_end]);
+
+                // Update the slot entry with the new offset
+                new_data[slot_offset..slot_offset + 2]
+                    .copy_from_slice(&new_value_offset.to_le_bytes());
+                new_data[slot_offset + 2..slot_offset + 4]
+                    .copy_from_slice(&value_length.to_le_bytes());
+                new_data[slot_offset + 4..slot_offset + 6].copy_from_slice(&1u16.to_le_bytes());
+
+                current_offset = new_value_offset;
+            } else {
+                // This slot is unused, mark it as such
+                new_data[slot_offset..slot_offset + 2].copy_from_slice(&0u16.to_le_bytes());
+                new_data[slot_offset + 2..slot_offset + 4].copy_from_slice(&0u16.to_le_bytes());
+                new_data[slot_offset + 4..slot_offset + 6].copy_from_slice(&0u16.to_le_bytes());
+            }
+        }
+
+        // Update the free_end offset in the header
+        new_data[4..6].copy_from_slice(&current_offset.to_le_bytes());
+
+        // Replace the page data with the rebuilt data
+        self.data = new_data;
+
+        Some(())
     }
 }
 
@@ -69,7 +359,8 @@ impl HeapPage for Page {
 /// This should iterate through all valid values of the page.
 pub struct HeapPageIntoIter {
     page: Page,
-    // todo!("Add any fields you need here")
+    slot_index: SlotId,
+    slot_num: SlotId,
 }
 
 /// The implementation of the (consuming) page iterator.
@@ -79,7 +370,16 @@ impl Iterator for HeapPageIntoIter {
     type Item = (Vec<u8>, SlotId);
 
     fn next(&mut self) -> Option<Self::Item> {
-        todo!("Your code here")
+        while self.slot_index < self.slot_num {
+            let slot_id = self.slot_index;
+            self.slot_index += 1;
+
+            if let Some(value) = self.page.get_value(slot_id) {
+                return Some((value, slot_id));
+            }
+            // Otherwise we're at an empty slot and we need to skip it and continue
+        }
+        None
     }
 }
 
@@ -91,7 +391,11 @@ impl IntoIterator for Page {
     type IntoIter = HeapPageIntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
-        todo!("Your code here")
+        HeapPageIntoIter {
+            slot_num: self.get_num_slots(),
+            slot_index: 0,
+            page: self,
+        }
     }
 }
 

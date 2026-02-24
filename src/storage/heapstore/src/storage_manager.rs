@@ -100,7 +100,7 @@ impl StorageTrait for StorageManager {
             let reader = fs::File::open(sm_file).expect("error opening persist config file");
             let sm: StorageManager =
                 serde_json::from_reader(reader).expect("error reading from json");
-            
+
             let mut hm: HashMap<ContainerId, Arc<HeapFile>> = HashMap::new();
             let mut hmfiles: HashMap<ContainerId, Arc<PathBuf>> = HashMap::new();
 
@@ -299,7 +299,6 @@ impl Drop for StorageManager {
     }
 }
 
-
 #[cfg(test)]
 #[allow(unused_must_use)]
 mod test {
@@ -415,5 +414,3 @@ mod test {
         assert_eq!(1000, count);
     }
 }
-
-

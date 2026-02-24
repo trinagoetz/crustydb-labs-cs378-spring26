@@ -24,7 +24,6 @@ pub struct Aggregate {
     child: Box<dyn OpIterator>,
     /// If true, then the operator will be rewinded in the future.
     will_rewind: bool,
-    
     // States (Need to reset on close)
     // todo!("Your code here")
 }

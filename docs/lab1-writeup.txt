@@ -1,0 +1,22 @@
+
+Lab 1 Writeup - Trina Goetz
+
+My solution(s) for this lab are as follows: 
+Insertion: I check if there is enough free space in the page to insert the given value plus a new slot just incase. I consolidate
+    freespace every time I insert a value so I don't hold any slots hostage. I keep track of what slots are in use with a value in 
+    the slot's metadata, 0 if empty, 1 if in use by a record. When I check for total free space, I add the space between the header
+    and the free space end offset to the sum of all the slots not in use at the moment. When I consolidate (only when I know I have 
+    the space), I empty the unused slots completely so I know I can use them when adding, and I shift all the records to the "right"
+    side of the page, so all the free space ends up between the header and when the records start. Then I search for an empty slot
+    and insert the record at the end of the free space. 
+Deletion: I make sure the slot is already in use, and then if it is, all I do is set the "used" value in the slot to 0 so I know that
+    it is now free space. I keep track of it this way because it lets me not consolidate every time, but it also gives me an easy way
+    to calculate TOTAL free space by looping through the slots with this value set to 0 and adding the lengths. I did not want to make
+    a global to keep track of free space because I have had bugs with global variables in past projects and I figured this is a safer 
+    way to get the exact free space every time I want to add. I don't do anyting else in deletion becuase we shouldn't be reading from 
+    the bytes at this value's offset anymore anyways, and when I consolidate it will get rid of them. 
+
+I spent around 6 hours on this lab, including planning/designing and implementing the functions required. I liked all of the documentation, 
+    it was very helpful to see exactly what each function would do, and it was easy to plan with these guidelines. I also like the
+    specific types for SlotId and Offset and PageId, these were easy to keep track of and made the math easier. The hardest part for me was
+    making the iterator since I haven't made a custom one in a while, but once I remembered how to do it, it wasn't that bad to complete.
