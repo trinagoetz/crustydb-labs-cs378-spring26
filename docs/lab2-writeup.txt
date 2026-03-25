@@ -1,0 +1,14 @@
+Lab 2 Writeup - Trina Goetz
+
+My design decisions for this lab are as follows: 
+    I chose not to implement a header page or free-space map, and instead just get the number of pages from the file size. This kept 
+        the heap file simple and avoided maintaining extra metadata.
+    For insertion, I used a linear scan of pages to find available space rather than tracking free space across pages. This was simpler
+        than keeping the map of free space and fit the specs for this lab.
+    I implemented update as delete + insert to avoid handling in-place resizing of values, since values can change size.
+    In the iterator, I used the existing page iterator (IntoIterator for Page) rather than reimplementing slot traversal logic, but
+        I added a helper to allow the iterator to start from a given slot (new_from), since the provided page iterator only started 
+        at slot 0.
+
+I spent around 4 hours on this lab, including planning/designing and implementing the functions required. The design was clear overall, 
+    but the insertion logic and iterator edge cases were the most challenging parts for me to figure out.

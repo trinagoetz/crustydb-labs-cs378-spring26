@@ -70,8 +70,7 @@ impl HeapPage for Page {
             .copy_from_slice(&(bytes.len() as Offset).to_le_bytes());
 
         // And then copy the data from the value into the page
-        self.data[free_end as usize - bytes.len()..free_end as usize]
-            .clone_from_slice(bytes);
+        self.data[free_end as usize - bytes.len()..free_end as usize].clone_from_slice(bytes);
 
         // And update the freespace offset
         self.data[4..6].copy_from_slice(&(free_end - bytes.len() as Offset).to_le_bytes());
@@ -380,6 +379,17 @@ impl Iterator for HeapPageIntoIter {
             // Otherwise we're at an empty slot and we need to skip it and continue
         }
         None
+    }
+}
+
+/// Helper function new_from creates a new page iterator to start at a given slot (for lab 2)
+impl HeapPageIntoIter {
+    pub fn new_from(page: Page, start_slot: SlotId) -> Self {
+        HeapPageIntoIter {
+            slot_num: page.get_num_slots(),
+            slot_index: start_slot,
+            page,
+        }
     }
 }
 

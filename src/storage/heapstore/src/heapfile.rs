@@ -35,6 +35,7 @@ impl HeapFile {
     /// Create a new heapfile for the given path. Return Result<Self> if able to create.
     /// Errors could arise from permissions, space, etc when trying to create the file used by HeapFile.
     pub(crate) fn new(file_path: PathBuf, container_id: ContainerId) -> Result<Self, CrustyError> {
+        // Check for permissions
         let file = match OpenOptions::new()
             .read(true)
             .write(true)
@@ -50,26 +51,73 @@ impl HeapFile {
                 )))
             }
         };
-        panic!("TODO milestone hs");
+
+        Ok(HeapFile {
+            file: Arc::new(RwLock::new(file)),
+            container_id,
+            read_count: AtomicU16::new(0),
+            write_count: AtomicU16::new(0),
+        })
     }
 
     /// Return the number of pages for this HeapFile.
     /// Return type is PageId (alias for another type) as we cannot have more
     /// pages than PageId can hold.
     pub fn num_pages(&self) -> PageId {
-        panic!("TODO milestone hs");
+        let file = self.file.read().unwrap();
+        let metadata = match file.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                panic!("Could not get heapfile metadata: {:?}", error);
+            }
+        };
+
+        // just calculate the number of pages by dividing file length by page size
+        (metadata.len() as usize / PAGE_SIZE) as PageId
     }
 
     /// Read the page from the file.
     /// Errors could arise from the filesystem or invalid pageId
     /// Note: that std::io::{Seek, SeekFrom} require Write locks on the underlying std::fs::File
     pub(crate) fn read_page_from_file(&self, pid: PageId) -> Result<Page, CrustyError> {
-        //If profiling count reads
+        // If profiling, count reads
         #[cfg(feature = "profile")]
         {
             self.read_count.fetch_add(1, Ordering::Relaxed);
         }
-        panic!("TODO milestone hs");
+
+        // check valid page id
+        if pid >= self.num_pages() {
+            return Err(CrustyError::CrustyError(format!(
+                "Invalid page id {} for container {}",
+                pid, self.container_id
+            )));
+        }
+
+        // get the file write lock and page offset in the file
+        let mut file = self.file.write().unwrap();
+        let offset = (pid as u64) * (PAGE_SIZE as u64);
+
+        // try to access the page offset in the file
+        if let Err(error) = file.seek(SeekFrom::Start(offset)) {
+            return Err(CrustyError::CrustyError(format!(
+                "Could not seek to page {}: {:?}",
+                pid, error
+            )));
+        }
+
+        let mut buffer = [0u8; PAGE_SIZE];
+
+        // try to read the page data/bytes into the buffer
+        if let Err(error) = file.read_exact(&mut buffer) {
+            return Err(CrustyError::CrustyError(format!(
+                "Could not read page {}: {:?}",
+                pid, error
+            )));
+        }
+
+        // return the page from the bytes we read
+        Ok(Page::from_bytes(buffer))
     }
 
     /// Take a page and write it to the underlying file.
@@ -80,12 +128,44 @@ impl HeapFile {
             page.get_page_id(),
             self.container_id
         );
-        //If profiling count writes
+        // If profiling, count writes
         #[cfg(feature = "profile")]
         {
             self.write_count.fetch_add(1, Ordering::Relaxed);
         }
-        panic!("TODO milestone hs");
+
+        let pid = page.get_page_id();
+        let num_pages = self.num_pages();
+
+        // check that the page id exists in the file
+        if pid > num_pages {
+            return Err(CrustyError::CrustyError(format!(
+                "Invalid page id {} for container {}",
+                pid, self.container_id
+            )));
+        }
+
+        // get the file write lock and page offset in the file
+        let mut file = self.file.write().unwrap();
+        let offset = (pid as u64) * (PAGE_SIZE as u64);
+
+        // try to access the page offset in the file
+        if let Err(error) = file.seek(SeekFrom::Start(offset)) {
+            return Err(CrustyError::CrustyError(format!(
+                "Could not seek to page {}: {:?}",
+                pid, error
+            )));
+        }
+
+        // write the given page at the page offset
+        if let Err(error) = file.write_all(page.to_bytes()) {
+            return Err(CrustyError::CrustyError(format!(
+                "Could not write page {}: {:?}",
+                pid, error
+            )));
+        }
+
+        Ok(())
     }
 }
 
