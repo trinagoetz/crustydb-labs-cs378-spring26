@@ -25,7 +25,11 @@ pub struct Aggregate {
     /// If true, then the operator will be rewinded in the future.
     will_rewind: bool,
     // States (Need to reset on close)
-    // todo!("Your code here")
+    open: bool,
+    groups: HashMap<Vec<Field>, Vec<Field>>,
+    counts: HashMap<Vec<Field>, Vec<i64>>, // only used for AVG
+    results: Vec<Tuple>,
+    result_idx: usize,
 }
 
 impl Aggregate {
@@ -38,7 +42,20 @@ impl Aggregate {
         child: Box<dyn OpIterator>,
     ) -> Self {
         assert!(ops.len() == agg_expr.len());
-        todo!("Your code here")
+        Self {
+            managers,
+            schema,
+            groupby_expr,
+            agg_expr,
+            ops,
+            child,
+            will_rewind: false,
+            open: false,
+            groups: HashMap::new(),
+            counts: HashMap::new(),
+            results: Vec::new(),
+            result_idx: 0,
+        }
     }
 
     fn merge_fields(op: AggOp, field_val: &Field, acc: &mut Field) -> Result<(), CrustyError> {
@@ -63,7 +80,62 @@ impl Aggregate {
     }
 
     pub fn merge_tuple_into_group(&mut self, tuple: &Tuple) {
-        todo!("Your code here");
+        // compute group key by evaluating all group-by expressions on tuple
+        let key: Vec<Field> = self.groupby_expr.iter().map(|e| e.eval(tuple)).collect();
+
+        // compute agg input values for tuple
+        let agg_vals: Vec<Field> = self.agg_expr.iter().map(|e| e.eval(tuple)).collect();
+
+        // if this group does not exist yet, initialize
+        if !self.groups.contains_key(&key) {
+            let mut initial_vals = Vec::new();
+            let mut initial_counts = vec![0; self.ops.len()];
+
+            for i in 0..self.ops.len() {
+                match self.ops[i] {
+                    // COUNT starts at 1 for first tuple
+                    AggOp::Count => {
+                        initial_vals.push(Field::Int(1));
+                    }
+                    // SUM, MIN, MAX start with the first value
+                    AggOp::Sum | AggOp::Min | AggOp::Max => {
+                        initial_vals.push(agg_vals[i].clone());
+                    }
+                    // AVG stores sum initially and tracks count also
+                    AggOp::Avg => {
+                        initial_vals.push(agg_vals[i].clone());
+                        initial_counts[i] = 1;
+                    }
+                }
+            }
+
+            // insert new group into hash maps
+            self.groups.insert(key.clone(), initial_vals);
+            self.counts.insert(key, initial_counts);
+            return;
+        }
+
+        // otherwise, update existing group
+        let entry = self.groups.get_mut(&key).unwrap();
+        let count_entry = self.counts.get_mut(&key).unwrap();
+
+        for i in 0..self.ops.len() {
+            match self.ops[i] {
+                // increment count
+                AggOp::Count => {
+                    entry[i] = (entry[i].clone() + Field::Int(1)).unwrap();
+                }
+                // merge SUM/MIN/MAX values
+                AggOp::Sum | AggOp::Min | AggOp::Max => {
+                    Self::merge_fields(self.ops[i], &agg_vals[i], &mut entry[i]).unwrap();
+                }
+                // AVG = accumulate sum + increment count
+                AggOp::Avg => {
+                    Self::merge_fields(AggOp::Sum, &agg_vals[i], &mut entry[i]).unwrap();
+                    count_entry[i] += 1;
+                }
+            }
+        }
     }
 }
 
@@ -75,19 +147,81 @@ impl OpIterator for Aggregate {
     }
 
     fn open(&mut self) -> Result<(), CrustyError> {
-        todo!("Your code here")
+        if !self.open {
+            self.child.open()?;
+
+            // consume all tuples and build groups
+            while let Some(t) = self.child.next()? {
+                self.merge_tuple_into_group(&t);
+            }
+
+            self.results.clear();
+
+            for (key, agg_vals) in &self.groups {
+                // start with groupby fields
+                let mut final_vals = key.clone();
+
+                let counts = self.counts.get(key);
+
+                for k in 0..agg_vals.len() {
+                    let val = match self.ops[k] {
+                        // finalize AVG = sum / count
+                        AggOp::Avg => {
+                            let sum = &agg_vals[k];
+                            let count = counts.unwrap()[k];
+
+                            match sum {
+                                Field::Int(n) => f_decimal(*n as f64 / count as f64),
+                                _ => panic!("AVG only supported for Int fields"),
+                            }
+                        }
+                        _ => agg_vals[k].clone(),
+                    };
+
+                    final_vals.push(val);
+                }
+                // store completed output table
+                self.results.push(Tuple::new(final_vals));
+            }
+
+            self.result_idx = 0;
+            self.open = true;
+        }
+        Ok(())
     }
 
     fn next(&mut self) -> Result<Option<Tuple>, CrustyError> {
-        todo!("Your code here")
+        if !self.open {
+            panic!("Operator has not been opened");
+        }
+        // if all results already returned, signal completion
+        if self.result_idx >= self.results.len() {
+            return Ok(None);
+        }
+        // otherwise return the next tuple and increment index
+        let t = self.results[self.result_idx].clone();
+        self.result_idx += 1;
+
+        Ok(Some(t))
     }
 
     fn close(&mut self) -> Result<(), CrustyError> {
-        todo!("Your code here")
+        self.child.close()?;
+        self.open = false;
+        self.groups.clear();
+        self.counts.clear();
+        self.results.clear();
+        self.result_idx = 0;
+        Ok(())
     }
 
     fn rewind(&mut self) -> Result<(), CrustyError> {
-        todo!("Your code here")
+        if !self.open {
+            panic!("Operator has not been opened");
+        }
+
+        self.result_idx = 0;
+        Ok(())
     }
 
     fn get_schema(&self) -> &TableSchema {

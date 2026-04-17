@@ -1,0 +1,22 @@
+Lab 3 Writeup - Trina Goetz
+
+My design decisions for this lab are as follows:
+    For NestedLoopJoin, I followed the structure of CrossJoin and kept a current left tuple while iterating
+        through all right tuples. After going through the entire right side, I rewound it and advanced the left 
+        tuple. This kept it simple and matched the iterator model well enough I think.
+    For HashEqJoin, I built a hash table on the left child during open(), and used the evaluated join key as
+        the key and stored a vector of tuples as the value. Then, I iterated through the right child and asked
+        the hash table for matches, and stored intermediate matches to return results. This avoided recomputing 
+        joins and improveed efficiency over nested loops.
+    For Aggregate, I used hash-based grouping with a HashMap where the key is some group-by fields and the 
+        value is intermediate aggregation results. I also kept up with a separate counts map to support averaging, 
+        since it requires keepting track of both sum and count to divide at the end. I processed all the tuples 
+        during open(), and then put the final results in a vector, which made next() simply just iterate over the
+        results.
+
+I spent around 4 hours on this lab, including planning/designing and implementing the required operators. The functions 
+    we had to implement were very clear, and I liked how it was easy to translate the algorithms we learned in class directly
+    to them once I figured out how they fit into the operator organization stuff in the repo. Aggregate was the
+    hardest part, especially handling averages correctly and avoiding double-counting during initialization, which I had
+    to debgug. Debugging edge cases like that took the most time, but the test cases were helpful to validate what I had
+    caught and what situations I still needed to account for.
