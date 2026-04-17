@@ -20,3 +20,8 @@ I spent around 4 hours on this lab, including planning/designing and implementin
     hardest part, especially handling averages correctly and avoiding double-counting during initialization, which I had
     to debgug. Debugging edge cases like that took the most time, but the test cases were helpful to validate what I had
     caught and what situations I still needed to account for.
+
+NOTE: I was kind of confused about what the "managers" objects are for in the 3 structs, but I left them alone. I'm not
+sure if they are used somewhere else in the lab but I got all my tests to pass without using them. They left me with 
+some warnings when I use cargo clippy though, so I wanted to leave a note here to explain I left them there since I wasn't
+sure if I would need them later on and I don't know if they are used for grading or something. 
